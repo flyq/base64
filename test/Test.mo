@@ -112,6 +112,15 @@ let test_slice = S.suite("Test Slice", do {
 	tests.toArray()
 });
 
+// let test_fast_portable_decode = S.suite("Test fast decode", do {
+// 	var tests : Buffer.Buffer<S.Suite> = Buffer.Buffer(4);
+// 	let output : [Nat8] = [0, 1, 2, 3, 4, 5, 6, 7];
+
+
+// 	tests.add(S.test("fast decode test", Array.equal<Nat8>(expect, a.get_array(), Nat8.equal), M.equals(T.bool(true))));
+
+// })
+
 let suite = S.suite("base64", [
 	test_alphabet,
 	test_engine,

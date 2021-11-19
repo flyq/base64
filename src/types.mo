@@ -1,3 +1,5 @@
+import Iter "mo:base/Iter";
+import Array "mo:base/Array";
 module {
 
     /// Errors that can occur while decoding.
@@ -31,5 +33,21 @@ module {
         } else {
             ?(a-b)
         };
+    };
+
+    public func sub_array<T>(a: [T], start: Nat, end: Nat) : [var T] {
+        let res = Array.init<T>(end-start+1, a[0]);
+        for (i in Iter.range(start, end)) {
+            res[i-start] := a[i];
+        };
+        res
+    };
+
+    public func sub_array_mut<T>(a: [var T], start: Nat, end: Nat) : [var T] {
+        let res = Array.init<T>(end-start+1, a[0]);
+        for (i in Iter.range(start, end)) {
+            res[i-start] := a[i];
+        };
+        res
     };
 };

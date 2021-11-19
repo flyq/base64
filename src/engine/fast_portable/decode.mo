@@ -4,6 +4,8 @@ import Result "mo:base/Result";
 import Nat8 "mo:base/Nat8";
 import Nat64 "mo:base/Nat64";
 import Array "mo:base/Array";
+import Iter "mo:base/Iter";
+import Prelude "mo:base/Prelude";
 
 module {
     type DecodeError = Types.DecodeError;
@@ -101,7 +103,7 @@ module {
     // We're on the fragile edge of compiler heuristics here. If this is not inlined, slow. If this is
     // inlined(always), a different slow. plain ol' inline makes the benchmarks happiest at the moment,
     // but this is fragile and the best setting changes with only minor code modifications.
-    public func decode_helper(input: [Nat8], estimate: FastPortableEstimate, output: Slice.Slice<Nat8>, decode_table: [Nat8], decode_allow_trailing_bits: Bool) : Result.Result<([Nat8], Nat), DecodeError> {
+    public func decode_helper(input: [Nat8], estimate: FastPortableEstimate, output: Slice.Slice<Nat8>, decode_table: [Nat8], decode_allow_trailing_bits: Bool) : Result.Result<Nat, DecodeError> {
         let input_len = input.size();
         let remainder_len = input_len % INPUT_CHUNK_LEN;
 
@@ -153,23 +155,22 @@ module {
             switch (Types.checked_sub(length_of_fast_decode_chunks, INPUT_BLOCK_LEN)) {
                 case (?max_start_index) {
                     while (input_index <= max_start_index) {
-                        let input_slice = Slice.Slice<Nat8>();
                         let output_slice = output;
-                        input_slice.copy_from_slice(Array.thaw(input));
-                        input_slice.sub(input_index, input_index+INPUT_BLOCK_LEN-1);
                         output_slice.sub(output_index, output_index+DECODED_BLOCK_LEN-1);
 
-                        decode_chunk(input_slice.get_array(), input_index, decode_table, output_slice);
+                        ignore decode_chunk(input, input_index, decode_table, output_slice);
                         
                         let temp = Slice.Slice<Nat8>();
-                        decode_chunk(input_slice.get_sub(8, input_slice.len-1), input_index + 8, decode_table, temp);
-                        output_slice.modify(6, temp.get_array());
+                        ignore decode_chunk(Array.freeze(Types.sub_array<Nat8>(input, 8, input.size()-1)), input_index + 8, decode_table, temp);
+                        output_slice.modify_mut(6, temp.get_mut_array());
 
-                        decode_chunk(input_slice.get_sub(16, input_slice.len-1), input_index + 16, decode_table, temp);
-                        output_slice.modify(12, temp.get_array());
+                        ignore decode_chunk(Array.freeze(Types.sub_array<Nat8>(input, 16, input.size()-1)), input_index + 16, decode_table, temp);
+                        output_slice.modify_mut(12, temp.get_mut_array());
 
-                        decode_chunk(input_slice.get_sub(24, input_slice.len-1), input_index + 24, decode_table, temp);
-                        output_slice.modify(18, temp.get_Array());
+                        ignore decode_chunk(Array.freeze(Types.sub_array<Nat8>(input, 24, input.size()-1)), input_index + 24, decode_table, temp);
+                        output_slice.modify_mut(18, temp.get_mut_array());
+
+                        output.modify_mut(output_index, output_slice.get_mut_array());
 
                         input_index += INPUT_BLOCK_LEN;
                         output_index += DECODED_BLOCK_LEN - DECODED_CHUNK_SUFFIX;
@@ -181,10 +182,152 @@ module {
 
             // Fast loop, stage 2 (aka still pretty fast loop)
             // 8 bytes at a time for whatever we didn't do in stage 1.
-            switch (Types.checked_sub())
+            switch (Types.checked_sub(length_of_fast_decode_chunks, INPUT_CHUNK_LEN)) {
+                case (?max_start_index) {
+                    while (input_index < max_start_index) {
+                        let input_slice = Slice.Slice<Nat8>();
+                        let output_slice = output;
+                        input_slice.copy_from_slice(Array.thaw(input));
+                        input_slice.sub(input_index, input_index+INPUT_BLOCK_LEN-1);
+                        output_slice.sub(output_index, output_index+DECODED_CHUNK_LEN+DECODED_CHUNK_SUFFIX-1);
 
-        }
+                        ignore decode_chunk(input_slice.get_array(), input_index, decode_table, output_slice);
+                        output.modify_mut(output_index, output_slice.get_mut_array());
 
-        return #ok(([], 1));
+                        output_index += DECODED_CHUNK_LEN;
+                        input_index += INPUT_CHUNK_LEN;
+                        remaining_chunks -= 1;
+                    };
+                };
+                case (_) { };
+            };
+        };
+
+        // Stage 3
+        // If input length was such that a chunk had to be deferred until after the fast loop
+        // because decoding it would have produced 2 trailing bytes that wouldn't then be
+        // overwritten, we decode that chunk here. This way is slower but doesn't write the 2
+        // trailing bytes.
+        // However, we still need to avoid the last chunk (partial or complete) because it could
+        // have padding, so we always do 1 fewer to avoid the last chunk.     
+        for (_ in Iter.range(1, remaining_chunks-1)) {
+            let input_slice = Slice.Slice<Nat8>();
+            let output_slice = output;
+            input_slice.copy_from_slice(Array.thaw(input));
+            input_slice.sub(input_index, input.size()-1);
+            output_slice.sub(output_index, output_index+DECODED_CHUNK_LEN-1);
+
+            ignore decode_chunk_precise(input_slice.get_array(), input_index, decode_table, output_slice);
+            input_index += INPUT_CHUNK_LEN;
+            output_index += DECODED_CHUNK_LEN;
+        };
+
+        // Stage 4
+        // Finally, decode any leftovers that aren't a complete input block of 8 bytes.
+        // Use a u64 as a stack-resident 8 byte buffer.
+        var leftover_bits: Nat64 = 0;
+        var morsels_in_leftover: Nat64 = 0;
+        var padding_bytes = 0;
+        var first_padding_index: Nat = 0;
+        var last_symbol = 0:Nat8;
+        let start_of_leftovers = input_index;
+        
+        label f for (i in Iter.range(start_of_leftovers, input.size())) {
+            // '=' padding
+            if (input[i] == PAD_BYTE) {
+                // There can be bad padding in a few ways:
+                // 1 - Padding with non-padding characters after it
+                // 2 - Padding after zero or one non-padding characters before it
+                //     in the current quad.
+                // 3 - More than two characters of padding. If 3 or 4 padding chars
+                //     are in the same quad, that implies it will be caught by #2.
+                //     If it spreads from one quad to another, it will be an invalid byte
+                //     in the first quad.
+                if (i % 4 < 2) {
+                    // Check for case #2.
+                    let tmp = if (padding_bytes > 0) {
+                            // If we've already seen padding, report the first padding index.
+                            // This is to be consistent with the faster logic above: it will report an
+                            // error on the first padding character (since it doesn't expect to see
+                            // anything but actual encoded data).
+                            first_padding_index
+                        } else {
+                            // haven't seen padding before, just use where we are now
+                            i
+                        };
+                    let bad_padding_index = start_of_leftovers + tmp;
+
+                    return #err(#InvalidByte(bad_padding_index, input[i]));
+                };
+                if (padding_bytes == 0) {
+                    first_padding_index := i;
+                };
+                padding_bytes += 1;
+                continue f;
+            };
+
+            // Check for case #1.
+            // To make '=' handling consistent with the main loop, don't allow
+            // non-suffix '=' in trailing chunk either. Report error as first
+            // erroneous padding.   
+
+            if (padding_bytes > 0) {
+                return #err(#InvalidByte(start_of_leftovers + first_padding_index, PAD_BYTE));
+            };
+            last_symbol := input[i];
+
+            // can use up to 8 * 6 = 48 bits of the u64, if last chunk has no padding.
+            // Pack the leftovers from left to right.            
+            let shift: Nat64 = 64 - (morsels_in_leftover + 1) * 6;
+            let morsel = decode_table[Nat8.toNat(input[i])];
+            if (morsel == INVALID_VALUE) {
+                return #err(#InvalidByte(start_of_leftovers + i, input[i]));
+            };
+            leftover_bits |= (Nat64.fromNat(Nat8.toNat(morsel))) << shift;
+            morsels_in_leftover += 1;
+        };
+
+        // When encoding 1 trailing byte (e.g. 0xFF), 2 base64 bytes ("/w") are needed.
+        // / is the symbol for 63 (0x3F, bottom 6 bits all set) and w is 48 (0x30, top 2 bits
+        // of bottom 6 bits set).
+        // When decoding two symbols back to one trailing byte, any final symbol higher than
+        // w would still decode to the original byte because we only care about the top two
+        // bits in the bottom 6, but would be a non-canonical encoding. So, we calculate a
+        // mask based on how many bits are used for just the canonical encoding, and optionally
+        // error if any other bits are set. In the example of one encoded byte -> 2 symbols,
+        // 2 symbols can technically encode 12 bits, but the last 4 are non canonical, and
+        // useless since there are no more symbols to provide the necessary 4 additional bits
+        // to finish the second original byte.
+        let leftover_bits_ready_to_append : Nat64 = switch (morsels_in_leftover) {
+            case (0) { 0 };
+            case (2) { 8 };
+            case (3) { 16 };
+            case (4) { 24 };
+            case (6) { 32 };
+            case (7) { 40 };
+            case (8) { 48 };
+            case (_) { Prelude.unreachable() };
+        };
+
+        // // if there are bits set outside the bits we care about, last symbol encodes trailing bits that
+        // // will not be included in the output
+        // let mask = Nat64.fromNat(Int.abs(-1 >> leftover_bits_ready_to_append));
+        // if ((not decode_allow_trailing_bits) and (leftover_bits & mask) != 0) {
+        //     // last morsel is at `morsels_in_leftover` - 1
+        //     return #err(#InvalidLastSymbol(start_of_leftovers + morsels_in_leftover - 1, last_symbol));
+        // };
+
+        // TODO benchmark simply converting to big endian bytes
+        var leftover_bits_appended_to_buf: Nat64 = 0;
+        while (leftover_bits_appended_to_buf < leftover_bits_ready_to_append) {
+            // `as` simply truncates the higher bits, which is what we want here
+            let selected_bits = Nat8.fromNat(Nat64.toNat((leftover_bits >> (56 - leftover_bits_appended_to_buf))));
+            output.slice[output_index] := selected_bits;
+            output_index += 1;
+
+            leftover_bits_appended_to_buf += 8;
+        };
+
+        #ok(output_index)
     };
 };
