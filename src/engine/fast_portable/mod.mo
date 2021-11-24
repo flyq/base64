@@ -102,7 +102,7 @@ module {
                 while (input_index <= last_fast_index) {
                     // Major performance wins from letting the optimizer do the bounds check once, mostly
                     // on the output side
-                    let input_chunk = Array.freeze(Types.sub_array<Nat8>(input, input_index, input_index + (BLOCKS_PER_FAST_LOOP*6+2)));
+                    let input_chunk = Types.sub_array<Nat8>(input, input_index, input_index + (BLOCKS_PER_FAST_LOOP*6+2));
                     let output_chunk = output;
                     output_chunk.sub(output_index, output_index+ BLOCKS_PER_FAST_LOOP*8);
 
@@ -124,7 +124,7 @@ module {
                     output_chunk.slice[6] := encode_table_[Nat64.toNat((input_u64_0 >> 22) & LOW_SIX_BITS)];
                     output_chunk.slice[7] := encode_table_[Nat64.toNat((input_u64_0 >> 16) & LOW_SIX_BITS)];
 
-                    let input_u64_1 = read_u64(Array.freeze(Types.sub_array<Nat8>(input_chunk, 6, input_chunk.size()-1)));
+                    let input_u64_1 = read_u64(Types.sub_array<Nat8>(input_chunk, 6, input_chunk.size()-1));
                     output_chunk.slice[8] := encode_table_[Nat64.toNat((input_u64_1 >> 58) & LOW_SIX_BITS)];
                     output_chunk.slice[9] := encode_table_[Nat64.toNat((input_u64_1 >> 52) & LOW_SIX_BITS)];
                     output_chunk.slice[10] := encode_table_[Nat64.toNat((input_u64_1 >> 46) & LOW_SIX_BITS)];
@@ -134,7 +134,7 @@ module {
                     output_chunk.slice[14] := encode_table_[Nat64.toNat((input_u64_1 >> 22) & LOW_SIX_BITS)];
                     output_chunk.slice[15] := encode_table_[Nat64.toNat((input_u64_1 >> 16) & LOW_SIX_BITS)];
 
-                    let input_u64_2 = read_u64(Array.freeze(Types.sub_array<Nat8>(input_chunk, 12, input_chunk.size()-1)));
+                    let input_u64_2 = read_u64(Types.sub_array<Nat8>(input_chunk, 12, input_chunk.size()-1));
                     output_chunk.slice[16] := encode_table_[Nat64.toNat((input_u64_2 >> 58) & LOW_SIX_BITS)];
                     output_chunk.slice[17] := encode_table_[Nat64.toNat((input_u64_2 >> 52) & LOW_SIX_BITS)];
                     output_chunk.slice[18] := encode_table_[Nat64.toNat((input_u64_2 >> 46) & LOW_SIX_BITS)];
@@ -144,7 +144,7 @@ module {
                     output_chunk.slice[22] := encode_table_[Nat64.toNat((input_u64_2 >> 22) & LOW_SIX_BITS)];
                     output_chunk.slice[23] := encode_table_[Nat64.toNat((input_u64_2 >> 16) & LOW_SIX_BITS)];
 
-                    let input_u64_3 = read_u64(Array.freeze(Types.sub_array<Nat8>(input_chunk, 18, input_chunk.size()-1)));
+                    let input_u64_3 = read_u64(Types.sub_array<Nat8>(input_chunk, 18, input_chunk.size()-1));
                     output_chunk.slice[24] := encode_table_[Nat64.toNat((input_u64_3 >> 58) & LOW_SIX_BITS)];
                     output_chunk.slice[25] := encode_table_[Nat64.toNat((input_u64_3 >> 52) & LOW_SIX_BITS)];
                     output_chunk.slice[26] := encode_table_[Nat64.toNat((input_u64_3 >> 46) & LOW_SIX_BITS)];
@@ -169,7 +169,7 @@ module {
 
             // start at the first index not handled by fast loop, which may be 0.
             while (input_index < start_of_rem) {
-                let input_chunk = Array.freeze(Types.sub_array<Nat8>(input, input_index, input_index + 3));
+                let input_chunk = Types.sub_array<Nat8>(input, input_index, input_index + 3);
                 let output_chunk = output;
                 output_chunk.sub(output_index, output_index+4);                
 

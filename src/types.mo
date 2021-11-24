@@ -35,19 +35,11 @@ module {
         };
     };
 
-    public func sub_array<T>(a: [T], start: Nat, end: Nat) : [var T] {
-        let res = Array.init<T>(end-start+1, a[0]);
-        for (i in Iter.range(start, end)) {
-            res[i-start] := a[i];
-        };
-        res
+    public func sub_array<T>(a: [T], start: Nat, end: Nat) : [T] {
+        Array.tabulate<T>(end-start+1, func (i: Nat) : T { a[i+start] });
     };
 
-    public func sub_array_mut<T>(a: [var T], start: Nat, end: Nat) : [var T] {
-        let res = Array.init<T>(end-start+1, a[0]);
-        for (i in Iter.range(start, end)) {
-            res[i-start] := a[i];
-        };
-        res
+    public func sub_array_mut<T>(a: [var T], start: Nat, end: Nat) : [T] {
+        Array.tabulate<T>(end-start+1, func (i: Nat) : T { a[i+start] });
     };
 };
